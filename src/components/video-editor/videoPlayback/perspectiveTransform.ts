@@ -17,9 +17,9 @@ import type { PerspectiveWarpFilter } from "./perspectiveWarpFilter";
 
 // ── Constants ──────────────────────────────────────────────
 
-/** Maximum rotation in radians (~26°). After dead-zone and intensity scaling,
- *  effective max is ~15° matching FocuSee's dramatic visible 3D tilt. */
-const MAX_ROTATION = 0.45;
+/** Maximum rotation in radians (~34°). After dead-zone and intensity scaling,
+ *  effective max is ~17-20° matching FocuSee's dramatic visible 3D tilt. */
+const MAX_ROTATION = 0.60;
 
 /**
  * Dead zone around center where rotation is minimal. Focus within this
@@ -54,7 +54,7 @@ export function compute3DTransform(
   focus: ZoomFocus,
   progress: number,
 ): Transform3DResult {
-  const fov = ((config.fov ?? 45) * Math.PI) / 180;
+  const fov = ((config.fov ?? 75) * Math.PI) / 180;
 
   if (!config.enabled || progress <= 0 || config.intensity <= 0) {
     return { rotateX: 0, rotateY: 0, fov, strength: 0 };

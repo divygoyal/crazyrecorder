@@ -101,13 +101,13 @@ describe("compute3DTransform", () => {
     expect(fov).toBeCloseTo(Math.PI / 3, 3);
   });
 
-  it("defaults to 45° fov when not specified", () => {
+  it("defaults to 75° fov when not specified", () => {
     const { fov } = compute3DTransform(
       makeConfig(0.5),
       { cx: 0.5, cy: 0.5 },
       1,
     );
-    expect(fov).toBeCloseTo(Math.PI / 4, 3);
+    expect(fov).toBeCloseTo((75 * Math.PI) / 180, 3);
   });
 
   it("rotation magnitude stays within MAX_ROTATION", () => {
@@ -118,7 +118,7 @@ describe("compute3DTransform", () => {
       1,
     );
     const magnitude = Math.sqrt(rotateX * rotateX + rotateY * rotateY);
-    expect(magnitude).toBeLessThanOrEqual(0.46); // MAX_ROTATION = 0.45
+    expect(magnitude).toBeLessThanOrEqual(0.61); // MAX_ROTATION = 0.60
   });
 });
 

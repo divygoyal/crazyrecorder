@@ -132,10 +132,10 @@ const FRAGMENT = /* glsl */ `
 const DEFAULT_CORNER_RADIUS = 0.038;
 
 /** Default FOV in radians (~45°) */
-const DEFAULT_FOV = 1.0472; // 60° in radians
+const DEFAULT_FOV = 1.3090; // 75° in radians
 
 /** Extra padding so warped pixels aren't clipped at edges */
-const FILTER_PADDING = 150;
+const FILTER_PADDING = 250;
 
 export class PerspectiveWarpFilter extends Filter {
   constructor(rendererResolution?: number) {

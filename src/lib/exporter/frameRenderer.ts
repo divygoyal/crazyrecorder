@@ -850,7 +850,7 @@ export class FrameRenderer {
           this.perspectiveFilter.rotateX = springRotX;
           this.perspectiveFilter.rotateY = springRotY;
           this.perspectiveFilter.fov = fov;
-          this.perspectiveFilter.contentInset = activeProgress * 0.08;
+          this.perspectiveFilter.contentInset = activeProgress * 0.10;
           filters.push(this.perspectiveFilter);
         }
       }

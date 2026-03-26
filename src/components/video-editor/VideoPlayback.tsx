@@ -1382,7 +1382,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
               perspFilter.rotateY = springRotY;
               perspFilter.fov = fov;
               // Content inset creates the "floating card" look with dark background padding
-              perspFilter.contentInset = zoomProgress * 0.08;
+              perspFilter.contentInset = zoomProgress * 0.10;
               filters.push(perspFilter);
             }
 

@@ -344,7 +344,7 @@ export interface Zoom3DConfig {
 export const DEFAULT_ZOOM_3D_CONFIG: Zoom3DConfig = {
   enabled: true,
   intensity: 1.0,
-  fov: 60,
+  fov: 75,
 };
 
 export function clampFocusToDepth(
