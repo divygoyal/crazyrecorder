@@ -7,6 +7,8 @@ vi.mock('pixi.js', () => ({
   Sprite: class {},
   Graphics: class {},
   BlurFilter: class {},
+  Filter: class {},
+  GlProgram: { from: vi.fn(() => ({})) },
   Texture: {
     from: vi.fn(() => ({ destroy: vi.fn() })),
   },

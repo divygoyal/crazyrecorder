@@ -16,8 +16,8 @@ import { closeCountdownWindow, createCountdownWindow, getCountdownWindow } from 
 const execFileAsync = promisify(execFile)
 const nodeRequire = createRequire(import.meta.url)
 
-const PROJECT_FILE_EXTENSION = 'recordly'
-const LEGACY_PROJECT_FILE_EXTENSIONS = ['openscreen']
+const PROJECT_FILE_EXTENSION = 'yourbrand'
+const LEGACY_PROJECT_FILE_EXTENSIONS = ['openscreen', 'recordly']
 const PROJECTS_DIRECTORY_NAME = 'Projects'
 const PROJECT_THUMBNAIL_SUFFIX = '.preview.png'
 const RECENT_PROJECTS_FILE = path.join(app.getPath('userData'), 'recent-projects.json')
@@ -28,8 +28,8 @@ const COUNTDOWN_SETTINGS_FILE = path.join(app.getPath('userData'), 'countdown-se
 const AUTO_RECORDING_PREFIX = 'recording-'
 const AUTO_RECORDING_RETENTION_COUNT = 20
 const AUTO_RECORDING_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
-const ALLOW_RECORDLY_WINDOW_CAPTURE = Boolean(process.env['VITE_DEV_SERVER_URL'])
-const RECORDING_SESSION_MANIFEST_SUFFIX = '.recordly-session.json'
+const ALLOW_YOURBRAND_WINDOW_CAPTURE = Boolean(process.env['VITE_DEV_SERVER_URL'])
+const RECORDING_SESSION_MANIFEST_SUFFIX = '.yourbrand-session.json'
 const WHISPER_MODEL_DOWNLOAD_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin'
 const WHISPER_MODEL_DIR = path.join(app.getPath('userData'), 'whisper')
 const WHISPER_SMALL_MODEL_PATH = path.join(WHISPER_MODEL_DIR, 'ggml-small.bin')
@@ -320,7 +320,7 @@ async function buildProjectLibraryEntry(projectPath: string, projectsDir: string
 
     return {
       path: normalizedPath,
-      name: path.basename(normalizedPath).replace(/\.(recordly|openscreen)$/i, ''),
+      name: path.basename(normalizedPath).replace(/\.(yourbrand|recordly|openscreen)$/i, ''),
       updatedAt: stats.mtimeMs,
       thumbnailPath: thumbnailExists ? thumbnailPath : null,
       isCurrent: Boolean(currentProjectPath && normalizePath(currentProjectPath) === normalizedPath),
@@ -1327,7 +1327,7 @@ async function resolveWhisperExecutablePath(preferredPath?: string | null) {
     }
   }
 
-  throw new Error('No Whisper runtime was found. Recordly looked for a bundled binary first, then checked common system install locations.')
+  throw new Error('No Whisper runtime was found. YourBrand looked for a bundled binary first, then checked common system install locations.')
 }
 
 async function resolveCaptionAudioCandidates(videoPath: string) {
@@ -1409,7 +1409,7 @@ async function generateAutoCaptionsFromVideo(options: {
   await ensureReadableFile(whisperExecutablePath, 'whisper executable')
   await ensureReadableFile(whisperModelPath, 'whisper model')
 
-  const tempBase = path.join(app.getPath('temp'), `recordly-captions-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+  const tempBase = path.join(app.getPath('temp'), `yourbrand-captions-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const wavPath = `${tempBase}.wav`
   const outputBase = `${tempBase}-whisper`
   const srtPath = `${outputBase}.srt`
@@ -2446,6 +2446,7 @@ function snapshotCursorTelemetryForPersistence() {
 
 async function finalizeStoredVideo(videoPath: string) {
   snapshotCursorTelemetryForPersistence()
+
   currentVideoPath = videoPath
   currentProjectPath = null
   await persistPendingCursorTelemetry(videoPath)
@@ -2602,7 +2603,7 @@ export function registerIpcHandlers(
     const ownWindowNames = new Set(
       [
         app.getName(),
-        'Recordly',
+        'YourBrand',
         ...BrowserWindow.getAllWindows().flatMap((win) => {
           const title = win.getTitle().trim()
           return title ? [title] : []
@@ -2655,7 +2656,7 @@ export function registerIpcHandlers(
             return true
           }
 
-          if (ALLOW_RECORDLY_WINDOW_CAPTURE && normalizedName.includes('recordly')) {
+          if (ALLOW_YOURBRAND_WINDOW_CAPTURE && normalizedName.includes('yourbrand')) {
             return true
           }
 
@@ -2694,11 +2695,11 @@ export function registerIpcHandlers(
           const normalizedWindowName = normalizeDesktopSourceName(source.windowTitle ?? source.name)
           const normalizedAppName = normalizeDesktopSourceName(source.appName ?? '')
 
-          if (!ALLOW_RECORDLY_WINDOW_CAPTURE && normalizedAppName && normalizedAppName === ownAppName) {
+          if (!ALLOW_YOURBRAND_WINDOW_CAPTURE && normalizedAppName && normalizedAppName === ownAppName) {
             return false
           }
 
-          if (ALLOW_RECORDLY_WINDOW_CAPTURE && (normalizedAppName === 'recordly' || normalizedWindowName?.includes('recordly'))) {
+          if (ALLOW_YOURBRAND_WINDOW_CAPTURE && (normalizedAppName === 'yourbrand' || normalizedWindowName?.includes('yourbrand'))) {
             return true
           }
 
@@ -2744,7 +2745,7 @@ export function registerIpcHandlers(
             return true
           }
 
-          if (ALLOW_RECORDLY_WINDOW_CAPTURE && normalizedName.includes('recordly')) {
+          if (ALLOW_YOURBRAND_WINDOW_CAPTURE && normalizedName.includes('yourbrand')) {
             return true
           }
 
@@ -2959,6 +2960,8 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('switch-to-editor', () => {
+    console.log('[switch-to-editor] currentVideoPath:', currentVideoPath)
+    console.log('[switch-to-editor] currentRecordingSession:', JSON.stringify(currentRecordingSession))
     const mainWin = getMainWindow()
     if (mainWin) {
       mainWin.close()
@@ -2991,9 +2994,21 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
         const timestamp = Date.now()
         const outputPath = path.join(recordingsDir, `recording-${timestamp}.mp4`)
 
+        // Get the physical pixel dimensions for the capture target display
+        // to ensure recording at native resolution, not DPI-scaled logical pixels
+        const targetDisplayId = Number(source?.display_id) || 0
+        const displays = getScreen().getAllDisplays()
+        const targetDisplay = (targetDisplayId > 0
+          ? displays.find((d) => d.id === targetDisplayId)
+          : null) ?? getScreen().getPrimaryDisplay()
+        const physicalWidth = Math.round(targetDisplay.size.width * targetDisplay.scaleFactor)
+        const physicalHeight = Math.round(targetDisplay.size.height * targetDisplay.scaleFactor)
+
         const config: Record<string, unknown> = {
           outputPath,
           fps: 60,
+          width: physicalWidth,
+          height: physicalHeight,
         }
 
         if (options?.capturesSystemAudio) {
@@ -3085,13 +3100,13 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
       const appName = normalizeDesktopSourceName(String(source?.appName ?? ''))
       const ownAppName = normalizeDesktopSourceName(app.getName())
       if (
-        !ALLOW_RECORDLY_WINDOW_CAPTURE
+        !ALLOW_YOURBRAND_WINDOW_CAPTURE
         &&
         source?.id?.startsWith('window:')
         && appName
-        && (appName === ownAppName || appName === 'recordly')
+        && (appName === ownAppName || appName === 'yourbrand')
       ) {
-        return { success: false, message: 'Cannot record Recordly windows. Please select another app window.' }
+        return { success: false, message: 'Cannot record YourBrand windows. Please select another app window.' }
       }
 
       const helperPath = await ensureNativeCaptureHelperBinary()
@@ -4093,10 +4108,10 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
         : `${safeName}.${PROJECT_FILE_EXTENSION}`
 
       const result = await dialog.showSaveDialog({
-        title: 'Save Recordly Project',
+        title: 'Save YourBrand Project',
         defaultPath: path.join(projectsDir, defaultName),
         filters: [
-          { name: 'Recordly Project', extensions: [PROJECT_FILE_EXTENSION] },
+          { name: 'YourBrand Project', extensions: [PROJECT_FILE_EXTENSION] },
           { name: 'JSON', extensions: ['json'] }
         ],
         properties: ['createDirectory', 'showOverwriteConfirmation']
@@ -4134,10 +4149,10 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
     try {
       const projectsDir = await getProjectsDir()
       const result = await dialog.showOpenDialog({
-        title: 'Open Recordly Project',
+        title: 'Open YourBrand Project',
         defaultPath: projectsDir,
         filters: [
-          { name: 'Recordly Project', extensions: [PROJECT_FILE_EXTENSION, ...LEGACY_PROJECT_FILE_EXTENSIONS] },
+          { name: 'YourBrand Project', extensions: [PROJECT_FILE_EXTENSION, ...LEGACY_PROJECT_FILE_EXTENSIONS] },
           { name: 'JSON', extensions: ['json'] },
           { name: 'All Files', extensions: ['*'] }
         ],
@@ -4266,6 +4281,7 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('get-current-recording-session', () => {
+    console.log('[get-current-recording-session] returning:', JSON.stringify(currentRecordingSession))
     if (!currentRecordingSession) {
       return { success: false }
     }
@@ -4277,7 +4293,17 @@ body{background:transparent;overflow:hidden;width:100vw;height:100vh}
   })
 
   ipcMain.handle('get-current-video-path', () => {
+    console.log('[get-current-video-path] returning:', currentVideoPath)
     return currentVideoPath ? { success: true, path: currentVideoPath } : { success: false };
+  });
+
+  ipcMain.handle('check-file-exists', async (_, filePath: string) => {
+    try {
+      const stat = await fs.stat(filePath)
+      return { exists: true, size: stat.size }
+    } catch {
+      return { exists: false, size: 0 }
+    }
   });
 
   ipcMain.handle('clear-current-video-path', () => {

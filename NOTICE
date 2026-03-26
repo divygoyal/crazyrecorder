@@ -1,0 +1,24 @@
+YourBrand - Screen Recording and Editing Application
+
+This project is a fork of Recordly (https://github.com/webadderall/Recordly),
+which is itself based on the OpenScreen project by Siddharth Vaddem (2025).
+
+ORIGINAL ATTRIBUTION
+====================
+
+Recordly
+Copyright (C) 2026 webadderall
+Licensed under the GNU Affero General Public License v3 (AGPLv3)
+
+OpenScreen
+Copyright (c) 2025 Siddharth Vaddem
+Originally licensed under the MIT License
+
+MODIFICATIONS
+=============
+
+This fork has been modified by divygoyal. Changes include rebranding
+and the addition of a Chrome extension. All modifications are released
+under the same AGPLv3 license.
+
+Source code is available at: https://github.com/divygoyal/Recordly

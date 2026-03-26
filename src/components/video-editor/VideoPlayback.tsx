@@ -19,7 +19,6 @@ import {
   Container,
   Sprite,
   Graphics,
-  BlurFilter,
   Texture,
   VideoSource,
 } from "pixi.js";
@@ -38,6 +37,7 @@ import {
   type CursorStyle,
   type WebcamOverlaySettings,
   type ZoomTransitionEasing,
+  DEFAULT_ZOOM_3D_CONFIG,
 } from "./types";
 import {
   DEFAULT_FOCUS,
@@ -67,12 +67,27 @@ import { clampFocusToStage as clampFocusToStageUtil } from "./videoPlayback/focu
 import { updateOverlayIndicator } from "./videoPlayback/overlayUtils";
 import { layoutVideoContent as layoutVideoContentUtil } from "./videoPlayback/layoutUtils";
 import {
+  getPreviewRendererResolution,
+  hasActiveMotionBlur,
+} from "./videoPlayback/renderQuality";
+import {
   applyZoomTransform,
   computeFocusFromTransform,
   computeZoomTransform,
   createMotionBlurState,
   type MotionBlurState,
 } from "./videoPlayback/zoomTransform";
+import { PerspectiveWarpFilter } from "./videoPlayback/perspectiveWarpFilter";
+import {
+  compute3DTransform,
+  is3DZoomActive,
+} from "./videoPlayback/perspectiveTransform";
+import {
+  createSpringState,
+  stepSpringValue,
+  resetSpringState,
+  type SpringConfig,
+} from "./videoPlayback/motionSmoothing";
 import { createVideoEventHandlers } from "./videoPlayback/videoEventHandlers";
 import {
   type AspectRatio,
@@ -124,6 +139,15 @@ function createPlaybackAnimationState(): PlaybackAnimationState {
     y: 0,
   };
 }
+
+/** Spring config for 3D perspective rotation — FocuSee-style camera swing. */
+const PERSP_SPRING_CONFIG: SpringConfig = {
+  stiffness: 200,
+  damping: 22,
+  mass: 1.0,
+  restDelta: 0.0001,
+  restSpeed: 0.005,
+};
 
 function getEffectiveNativeAspectRatio(
   dimensions: { width: number; height: number } | null | undefined,
@@ -244,7 +268,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
       zoomOutEasing = DEFAULT_ZOOM_OUT_EASING,
       connectedZoomEasing = DEFAULT_CONNECTED_ZOOM_EASING,
       borderRadius = 0,
-      padding = 50,
+      padding = 20,
       cropRegion,
       webcam,
       webcamVideoPath,
@@ -293,8 +317,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     const animationStateRef = useRef<PlaybackAnimationState>(
       createPlaybackAnimationState(),
     );
-    const blurFilterRef = useRef<BlurFilter | null>(null);
     const motionBlurFilterRef = useRef<MotionBlurFilter | null>(null);
+    const perspectiveFilterRef = useRef<PerspectiveWarpFilter | null>(null);
+    const perspSpringXRef = useRef(createSpringState(0));
+    const perspSpringYRef = useRef(createSpringState(0));
+    const spotlightRef = useRef<HTMLDivElement | null>(null);
+    const showShadowRef = useRef(showShadow);
+    const shadowIntensityRef = useRef(shadowIntensity);
     const isDraggingFocusRef = useRef(false);
     const stageSizeRef = useRef({ width: 0, height: 0 });
     const videoSizeRef = useRef({ width: 0, height: 0 });
@@ -346,6 +375,17 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
     const cursorClickBounceRef = useRef(cursorClickBounce);
     const cursorClickBounceDurationRef = useRef(cursorClickBounceDuration);
     const cursorSwayRef = useRef(cursorSway);
+
+    const syncMotionBlurFilterState = useCallback(() => {
+      const videoContainer = videoContainerRef.current;
+      if (!videoContainer) return;
+
+      // NEVER pre-attach the motion blur filter to the container.
+      // PixiJS forces all rendering through a framebuffer when any filter is present,
+      // which degrades preview quality even when the filter velocity is [0,0].
+      // The animation tick will attach the filter only during active zoom motion.
+      videoContainer.filters = null;
+    }, []);
 
     const activeCaptionLayout = useMemo(() => {
       if (!autoCaptionSettings?.enabled || autoCaptions.length === 0 || typeof document === "undefined") {
@@ -761,11 +801,17 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
     useEffect(() => {
       zoomMotionBlurRef.current = zoomMotionBlur;
-    }, [zoomMotionBlur]);
+      syncMotionBlurFilterState();
+    }, [zoomMotionBlur, syncMotionBlurFilterState]);
 
     useEffect(() => {
       connectZoomsRef.current = connectZooms;
     }, [connectZooms]);
+
+    useEffect(() => {
+      showShadowRef.current = showShadow;
+      shadowIntensityRef.current = shadowIntensity;
+    }, [showShadow, shadowIntensity]);
 
     useEffect(() => {
       zoomInDurationMsRef.current = zoomInDurationMs;
@@ -862,10 +908,6 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
       cursorOverlayRef.current?.reset();
       motionBlurStateRef.current = createMotionBlurState();
 
-      if (blurFilterRef.current) {
-        blurFilterRef.current.blur = 0;
-      }
-
       requestAnimationFrame(() => {
         const container = cameraContainerRef.current;
         const videoStage = videoContainerRef.current;
@@ -886,7 +928,11 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
         applyZoomTransform({
           cameraContainer: container,
-          blurFilter: blurFilterRef.current,
+          videoContainer: videoContainerRef.current ?? undefined,
+          blurFilter: null,
+          motionBlurFilter: hasActiveMotionBlur(zoomMotionBlurRef.current)
+            ? motionBlurFilterRef.current
+            : null,
           stageSize: stageSizeRef.current,
           baseMask: baseMaskRef.current,
           zoomScale: 1,
@@ -1023,7 +1069,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           height: container.clientHeight,
           backgroundAlpha: 0,
           antialias: true,
-          resolution: window.devicePixelRatio || 1,
+          roundPixels: true,
+          resolution: getPreviewRendererResolution(window.devicePixelRatio),
           autoDensity: true,
         });
 
@@ -1137,6 +1184,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
       if ("autoUpdate" in source) {
         (source as { autoUpdate?: boolean }).autoUpdate = true;
       }
+      // Enable mipmaps for sharp downscaling (1920px video → ~1000px canvas)
+      // Without mipmaps, WebGL bilinear filtering blurs heavily on 2x+ downscale
+      source.autoGenerateMipmaps = true;
+      source.scaleMode = 'linear';
       const videoTexture = Texture.from(source);
 
       const videoSprite = new Sprite(videoTexture);
@@ -1153,14 +1204,11 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
       animationStateRef.current = createPlaybackAnimationState();
 
-      const blurFilter = new BlurFilter();
-      blurFilter.quality = 3;
-      blurFilter.resolution = app.renderer.resolution;
-      blurFilter.blur = 0;
       const motionBlurFilter = new MotionBlurFilter([0, 0], 5, 0);
-      videoContainer.filters = [blurFilter, motionBlurFilter];
-      blurFilterRef.current = blurFilter;
       motionBlurFilterRef.current = motionBlurFilter;
+      const perspFilter = new PerspectiveWarpFilter(app.renderer.resolution);
+      perspectiveFilterRef.current = perspFilter;
+      syncMotionBlurFilterState();
 
       layoutVideoContent();
       video.pause();
@@ -1206,20 +1254,20 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         }
         videoContainer.mask = null;
         maskGraphicsRef.current = null;
-        if (blurFilterRef.current) {
-          videoContainer.filters = [];
-          blurFilterRef.current.destroy();
-          blurFilterRef.current = null;
-        }
+        videoContainer.filters = null;
         if (motionBlurFilterRef.current) {
           motionBlurFilterRef.current.destroy();
           motionBlurFilterRef.current = null;
+        }
+        if (perspectiveFilterRef.current) {
+          perspectiveFilterRef.current.destroy();
+          perspectiveFilterRef.current = null;
         }
         videoTexture.destroy(false);
 
         videoSpriteRef.current = null;
       };
-    }, [pixiReady, videoReady, onTimeUpdate, updateOverlayForRegion]);
+    }, [pixiReady, videoReady, onTimeUpdate, updateOverlayForRegion, syncMotionBlurFilterState]);
 
     useEffect(() => {
       if (!pixiReady || !videoReady) return;
@@ -1234,15 +1282,20 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         focus: ZoomFocus,
         motionIntensity: number,
         motionVector: { x: number; y: number },
+        activeRegion: ZoomRegion | null,
+        zoomProgress: number,
       ) => {
         const cameraContainer = cameraContainerRef.current;
         if (!cameraContainer) return;
 
         const state = animationStateRef.current;
 
+        // Don't pass videoContainer — we manage filters ourselves below
+        // to avoid the conflict where applyZoomTransform wipes perspective filter
         const appliedTransform = applyZoomTransform({
           cameraContainer,
-          blurFilter: blurFilterRef.current,
+          videoContainer: undefined,
+          blurFilter: null,
           stageSize: stageSizeRef.current,
           baseMask: baseMaskRef.current,
           zoomScale: state.scale,
@@ -1253,7 +1306,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           motionVector,
           isPlaying: isPlayingRef.current,
           motionBlurAmount: zoomMotionBlurRef.current,
-          motionBlurFilter: motionBlurFilterRef.current,
+          motionBlurFilter: hasActiveMotionBlur(zoomMotionBlurRef.current)
+            ? motionBlurFilterRef.current
+            : null,
           transformOverride: transform,
           motionBlurState: motionBlurStateRef.current,
           frameTimeMs: performance.now(),
@@ -1262,6 +1317,106 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.x = appliedTransform.x;
         state.y = appliedTransform.y;
         state.appliedScale = appliedTransform.scale;
+
+        // ── Unified filter management ─────────────────────────
+        // Build the complete filter array ONCE per frame to avoid
+        // the churn that causes quality fluctuation.
+        const vc = videoContainerRef.current;
+        if (vc) {
+          const filters: import("pixi.js").Filter[] = [];
+
+          // Motion blur: check if the filter has active velocity
+          const mbf = motionBlurFilterRef.current;
+          if (mbf && hasActiveMotionBlur(zoomMotionBlurRef.current)) {
+            const vel = mbf.velocity as { x: number; y: number };
+            if (vel.x !== 0 || vel.y !== 0) {
+              filters.push(mbf);
+            }
+          }
+
+          // 3D perspective with spring animation (FocuSee-style camera swing)
+          const perspFilter = perspectiveFilterRef.current;
+          if (perspFilter) {
+            const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
+            const deltaMs = appRef.current?.ticker.deltaMS ?? 16;
+            const is3D = is3DZoomActive(zoom3d, zoomProgress);
+
+            // Compute target rotation (0 when not active)
+            let targetRotX = 0;
+            let targetRotY = 0;
+            let fov = 0.7854; // 45° default
+            if (is3D) {
+              const target = compute3DTransform(
+                zoom3d!,
+                focus,
+                zoomProgress,
+              );
+              targetRotX = target.rotateX * target.strength;
+              targetRotY = target.rotateY * target.strength;
+              fov = target.fov;
+            }
+
+            // Spring-animate each rotation axis independently
+            const springRotX = stepSpringValue(
+              perspSpringXRef.current,
+              targetRotX,
+              deltaMs,
+              PERSP_SPRING_CONFIG,
+            );
+            const springRotY = stepSpringValue(
+              perspSpringYRef.current,
+              targetRotY,
+              deltaMs,
+              PERSP_SPRING_CONFIG,
+            );
+
+            const hasRotation =
+              Math.abs(springRotX) > 0.0001 ||
+              Math.abs(springRotY) > 0.0001;
+
+            // FocuSee-style floating card: always apply filter during zoom
+            // for rounded corners + content inset; add perspective when rotating
+            const isZoomActive = zoomProgress > 0.01;
+            if (isZoomActive || hasRotation) {
+              perspFilter.rotateX = springRotX;
+              perspFilter.rotateY = springRotY;
+              perspFilter.fov = fov;
+              // Content inset creates the "floating card" look with dark background padding
+              perspFilter.contentInset = zoomProgress * 0.08;
+              filters.push(perspFilter);
+            }
+
+            // Spotlight background dimming
+            const spotlightEl = spotlightRef.current;
+            if (spotlightEl) {
+              spotlightEl.style.opacity = `${zoomProgress * 0.18}`;
+            }
+
+            // Tilt-responsive shadow (shifts with rotation, intensifies during zoom)
+            if (hasRotation) {
+              const containerEl = containerRef.current;
+              const si = shadowIntensityRef.current ?? 0;
+              if (containerEl && showShadowRef.current && si > 0) {
+                const shadowX = Math.round(springRotY * 200);
+                const shadowBaseY = si * 12;
+                const shadowY = Math.round(
+                  shadowBaseY - springRotX * 150,
+                );
+                const zoomBoost = 1 + zoomProgress * 0.35;
+                const blur1 = Math.round(si * 48 * zoomBoost);
+                const blur2 = Math.round(si * 16);
+                const blur3 = Math.round(si * 8);
+                containerEl.style.filter =
+                  `drop-shadow(${shadowX}px ${shadowY}px ${blur1}px rgba(0,0,0,${(si * 0.7 * zoomBoost).toFixed(2)})) ` +
+                  `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(si * 4 - springRotX * 50)}px ${blur2}px rgba(0,0,0,${(si * 0.5).toFixed(2)})) ` +
+                  `drop-shadow(0px ${Math.round(si * 2)}px ${blur3}px rgba(0,0,0,${(si * 0.3).toFixed(2)}))`;
+              }
+            }
+          }
+
+          // Set filters once (null when empty for maximum sharpness)
+          vc.filters = filters.length > 0 ? filters : null;
+        }
       };
 
       const ticker = () => {
@@ -1380,6 +1535,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           targetFocus,
           motionIntensity,
           motionVector,
+          region ?? null,
+          targetProgress,
         );
         applyWebcamBubbleLayout(animationStateRef.current.appliedScale || 1);
 
@@ -1570,6 +1727,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
             filter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : "none",
           }}
         />
+        {/* Spotlight overlay — dims background during zoom (FocuSee SpotLightCommand) */}
+        <div
+          ref={spotlightRef}
+          className="absolute inset-0 pointer-events-none"
+          style={{ backgroundColor: "black", opacity: 0 }}
+        />
         <div
           ref={containerRef}
           className="absolute inset-0"
@@ -1615,7 +1778,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
                     className="h-full w-full object-cover"
                     muted
                     playsInline
-                    preload="auto"
+                    preload="metadata"
                     style={{ transform: webcam.mirror ? "scaleX(-1)" : undefined }}
                   />
                 </div>
@@ -1776,7 +1939,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           ref={videoRef}
           src={videoPath}
           className="hidden"
-          preload="metadata"
+          preload="auto"
           playsInline
           onLoadedMetadata={handleLoadedMetadata}
           onDurationChange={(e) => {

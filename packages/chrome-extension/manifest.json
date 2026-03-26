@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "YourBrand Screen Recorder",
+  "version": "1.0.0",
+  "description": "Record, edit, and export polished screen recordings — right from your browser.",
+  "permissions": [
+    "tabCapture",
+    "desktopCapture",
+    "storage",
+    "offscreen",
+    "unlimitedStorage"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["editor.html", "offscreen.html"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

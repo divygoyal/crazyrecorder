@@ -35,6 +35,7 @@ import type {
 	PlaybackSpeed,
 	WebcamOverlaySettings,
 	WebcamPositionPreset,
+	Zoom3DConfig,
 	ZoomDepth,
 	ZoomTransitionEasing,
 } from "./types";
@@ -57,6 +58,7 @@ import {
 	DEFAULT_WEBCAM_SHADOW,
 	DEFAULT_WEBCAM_SIZE,
 	DEFAULT_ZOOM_MOTION_BLUR,
+	DEFAULT_ZOOM_3D_CONFIG,
 	SPEED_OPTIONS,
 } from "./types";
 import { fromCursorSwaySliderValue, toCursorSwaySliderValue } from "./videoPlayback/cursorSway";
@@ -139,6 +141,8 @@ interface SettingsPanelProps {
 	onWallpaperChange: (path: string) => void;
 	selectedZoomDepth?: ZoomDepth | null;
 	onZoomDepthChange?: (depth: ZoomDepth) => void;
+	selectedZoom3d?: Zoom3DConfig;
+	onZoom3DChange?: (config: Zoom3DConfig) => void;
 	selectedZoomId?: string | null;
 	onZoomDelete?: (id: string) => void;
 	selectedTrimId?: string | null;
@@ -459,6 +463,8 @@ export function SettingsPanel({
 	onWallpaperChange,
 	selectedZoomDepth,
 	onZoomDepthChange,
+	selectedZoom3d,
+	onZoom3DChange,
 	selectedZoomId,
 	onZoomDelete,
 	selectedTrimId,
@@ -1158,7 +1164,7 @@ export function SettingsPanel({
 
 	if (isBackgroundPanel) {
 		return (
-			<div className="flex-[2] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
+			<div className="flex-[2] min-w-[240px] max-w-[280px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
 				<div className="flex-1 overflow-y-auto custom-scrollbar p-4">
 					<div className="mb-4 flex items-center gap-2">
 						<Palette className="w-4 h-4 text-[#2563EB]" />
@@ -1933,7 +1939,7 @@ export function SettingsPanel({
 	})();
 
 	return (
-		<div className="flex-[2] min-w-[280px] max-w-[332px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
+		<div className="flex-[2] min-w-[240px] max-w-[280px] bg-[#161619] border border-white/10 rounded-2xl flex flex-col shadow-xl h-full overflow-hidden">
 			<div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 pb-0">
 				<AnimatePresence mode="wait" initial={false}>
 					<motion.div
@@ -1986,6 +1992,50 @@ export function SettingsPanel({
 						<p className="mt-2 text-center text-[10px] text-slate-500">
 							{tSettings("zoom.selectRegion")}
 						</p>
+					)}
+					{zoomEnabled && (
+						<div className="mt-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+							<div className="mb-2 flex items-center justify-between">
+								<span className="text-xs font-medium text-slate-300">Zoom Style</span>
+								<div className="flex gap-1 rounded-md bg-white/5 p-0.5">
+									<button
+										type="button"
+										onClick={() => onZoom3DChange?.({ ...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG), enabled: false })}
+										className={cn(
+											"rounded px-2.5 py-1 text-[10px] font-semibold transition-all",
+											!selectedZoom3d?.enabled
+												? "bg-[#2563EB] text-white shadow-sm"
+												: "text-slate-400 hover:text-slate-200",
+										)}
+									>
+										2D
+									</button>
+									<button
+										type="button"
+										onClick={() => onZoom3DChange?.({ ...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG), enabled: true })}
+										className={cn(
+											"rounded px-2.5 py-1 text-[10px] font-semibold transition-all",
+											selectedZoom3d?.enabled
+												? "bg-[#2563EB] text-white shadow-sm"
+												: "text-slate-400 hover:text-slate-200",
+										)}
+									>
+										3D
+									</button>
+								</div>
+							</div>
+							{selectedZoom3d?.enabled && (
+								<SliderControl
+									label="Intensity"
+									value={Math.round((selectedZoom3d?.intensity ?? 0.5) * 100)}
+									onChange={(v) => onZoom3DChange?.({ ...(selectedZoom3d ?? DEFAULT_ZOOM_3D_CONFIG), intensity: v / 100 })}
+									min={10}
+									max={100}
+									step={5}
+									formatValue={(v) => `${v}%`}
+								/>
+							)}
+						</div>
 					)}
 					{zoomEnabled && (
 						<Button

@@ -36,7 +36,7 @@ import zhCNSettings from '@/i18n/locales/zh-CN/settings.json'
 import zhCNShortcuts from '@/i18n/locales/zh-CN/shortcuts.json'
 import zhCNTimeline from '@/i18n/locales/zh-CN/timeline.json'
 
-const LOCALE_STORAGE_KEY = 'recordly.locale'
+const LOCALE_STORAGE_KEY = 'yourbrand.locale'
 
 type LocaleBundle = Record<I18nNamespace, Record<string, unknown>>
 

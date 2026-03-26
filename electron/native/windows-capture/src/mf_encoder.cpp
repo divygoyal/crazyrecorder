@@ -1,7 +1,9 @@
 #include "mf_encoder.h"
+#include <algorithm>
 #include <mfapi.h>
 #include <mferror.h>
 #include <codecapi.h>
+#include <cstdint>
 #include <iostream>
 #include <cstring>
 
@@ -14,6 +16,26 @@ static int clampByte(int v) {
     return v < 0 ? 0 : (v > 255 ? 255 : v);
 }
 
+static UINT32 calculateAverageBitrate(int width, int height, int fps) {
+    const int64_t totalPixels = static_cast<int64_t>(width) * static_cast<int64_t>(height);
+
+    UINT32 baseBitrate = 12000000;
+    if (totalPixels >= 3840LL * 2160LL) {
+        baseBitrate = 120000000;
+    } else if (totalPixels >= 2560LL * 1440LL) {
+        baseBitrate = 80000000;
+    } else if (totalPixels >= 1920LL * 1080LL) {
+        baseBitrate = 50000000;
+    } else if (totalPixels >= 1280LL * 720LL) {
+        baseBitrate = 24000000;
+    }
+
+    const int safeFps = fps > 0 ? fps : 60;
+    const uint64_t scaledBitrate = (static_cast<uint64_t>(baseBitrate) * static_cast<uint64_t>(safeFps) + 30ULL) / 60ULL;
+    const uint64_t clampedBitrate = std::clamp<uint64_t>(scaledBitrate, 8000000ULL, 150000000ULL);
+    return static_cast<UINT32>(clampedBitrate);
+}
+
 MFEncoder::MFEncoder() {}
 
 MFEncoder::~MFEncoder() {
@@ -23,6 +45,12 @@ MFEncoder::~MFEncoder() {
 bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height, int fps,
                            ID3D11Device* device, ID3D11DeviceContext* context) {
     if (initialized_) return false;
+
+    if (width <= 0 || height <= 0 || fps <= 0) {
+        std::cerr << "ERROR: Encoder requires positive dimensions and FPS, got "
+                  << width << "x" << height << " @" << fps << "fps" << std::endl;
+        return false;
+    }
 
     if (width % 2 != 0 || height % 2 != 0) {
         std::cerr << "ERROR: Encoder dimensions must be even, got " << width << "x" << height << std::endl;
@@ -48,7 +76,7 @@ bool MFEncoder::initialize(const std::wstring& outputPath, int width, int height
 
     outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     outputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-    outputType->SetUINT32(MF_MT_AVG_BITRATE, 20000000);
+    outputType->SetUINT32(MF_MT_AVG_BITRATE, calculateAverageBitrate(width_, height_, fps_));
     MFSetAttributeSize(outputType.Get(), MF_MT_FRAME_SIZE, width_, height_);
     MFSetAttributeRatio(outputType.Get(), MF_MT_FRAME_RATE, fps_, 1);
     MFSetAttributeRatio(outputType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);

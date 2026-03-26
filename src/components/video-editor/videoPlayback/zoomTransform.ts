@@ -25,6 +25,7 @@ export function createMotionBlurState(): MotionBlurState {
 
 interface TransformParams {
   cameraContainer: Container;
+  videoContainer?: Container;
   blurFilter: BlurFilter | null;
   motionBlurFilter?: MotionBlurFilter | null;
   stageSize: { width: number; height: number };
@@ -128,6 +129,7 @@ export function computeFocusFromTransform({
 
 export function applyZoomTransform({
   cameraContainer,
+  videoContainer,
   blurFilter,
   motionBlurFilter,
   stageSize,
@@ -178,6 +180,8 @@ export function applyZoomTransform({
       motionBlurFilter.velocity = { x: 0, y: 0 };
       motionBlurFilter.kernelSize = 5;
       motionBlurFilter.offset = 0;
+      // No velocity yet — keep filter detached for sharp rendering
+      if (videoContainer) videoContainer.filters = null;
       if (blurFilter) blurFilter.blur = 0;
     } else {
       const dtMs = Math.min(80, Math.max(1, now - motionBlurState.lastFrameTimeMs));
@@ -204,19 +208,27 @@ export function applyZoomTransform({
         ? 0
         : normalised * normalised * MAX_BLUR_PX * motionBlurAmount;
 
-      const dirMag = Math.sqrt(velocityX * velocityX + velocityY * velocityY) || 1;
-      const velocityScale = targetBlur * 1.2;
-      motionBlurFilter.velocity = targetBlur > 0
-        ? { x: (velocityX / dirMag) * velocityScale, y: (velocityY / dirMag) * velocityScale }
-        : { x: 0, y: 0 };
-      motionBlurFilter.kernelSize = targetBlur > 4 ? 11 : targetBlur > 1.5 ? 9 : 5;
-      motionBlurFilter.offset = targetBlur > 0.5 ? -0.2 : 0;
+      if (targetBlur > 0) {
+        // Active motion — attach filter and set velocity
+        const dirMag = Math.sqrt(velocityX * velocityX + velocityY * velocityY) || 1;
+        const velocityScale = targetBlur * 1.2;
+        motionBlurFilter.velocity = { x: (velocityX / dirMag) * velocityScale, y: (velocityY / dirMag) * velocityScale };
+        motionBlurFilter.kernelSize = targetBlur > 4 ? 11 : targetBlur > 1.5 ? 9 : 5;
+        motionBlurFilter.offset = targetBlur > 0.5 ? -0.2 : 0;
+        if (videoContainer) videoContainer.filters = [motionBlurFilter];
+      } else {
+        // No motion — detach filter so PixiJS skips the framebuffer pass
+        motionBlurFilter.velocity = { x: 0, y: 0 };
+        if (videoContainer) videoContainer.filters = null;
+      }
 
       if (blurFilter) {
         blurFilter.blur = 0;
       }
     }
   } else {
+    // Motion blur not active — ensure filter is detached for maximum sharpness
+    if (videoContainer) videoContainer.filters = null;
     if (motionBlurFilter) {
       motionBlurFilter.velocity = { x: 0, y: 0 };
       motionBlurFilter.kernelSize = 5;

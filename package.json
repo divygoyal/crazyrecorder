@@ -1,15 +1,15 @@
 {
-	"name": "recordly",
-	"productName": "Recordly",
+	"name": "yourbrand",
+	"productName": "YourBrand",
 	"description": "A free, creator-focused screen recorder with auto-zoom, cursor effects, backgrounds, annotations, and more - built for polished videos out of the box.",
-	"author": "webadderall",
-	"homepage": "https://github.com/webadderall/Recordly",
+	"author": "divygoyal",
+	"homepage": "https://github.com/divygoyal/Recordly",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/webadderall/Recordly.git"
+		"url": "https://github.com/divygoyal/Recordly.git"
 	},
 	"bugs": {
-		"url": "https://github.com/webadderall/Recordly/issues"
+		"url": "https://github.com/divygoyal/Recordly/issues"
 	},
 	"private": true,
 	"version": "1.1.4",
@@ -33,7 +33,8 @@
 		"build:linux": "npm run build:platform-native-helpers && tsc && vite build && electron-builder --linux",
 		"i18n:check": "node scripts/i18n-check.mjs",
 		"test": "vitest --run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"build:extension": "cd packages/chrome-extension && npm run build"
 	},
 	"dependencies": {
 		"capturekit": "^1.0.13",

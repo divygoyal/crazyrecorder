@@ -11,6 +11,7 @@ export interface ZoomRegion {
   endMs: number;
   depth: ZoomDepth;
   focus: ZoomFocus;
+  zoom3d?: Zoom3DConfig;
 }
 
 export interface CursorTelemetryPoint {
@@ -50,7 +51,7 @@ export type CursorStyle = "tahoe" | "dot" | "figma" | "mono";
 export const DEFAULT_CURSOR_STYLE: CursorStyle = "tahoe";
 
 export type ZoomTransitionEasing =
-  | "recordly"
+  | "yourbrand"
   | "glide"
   | "smooth"
   | "snappy"
@@ -93,8 +94,8 @@ export const DEFAULT_ZOOM_IN_OVERLAP_MS = 500;
 export const DEFAULT_ZOOM_OUT_DURATION_MS = 1015.05;
 export const DEFAULT_CONNECTED_ZOOM_GAP_MS = 1500;
 export const DEFAULT_CONNECTED_ZOOM_DURATION_MS = 1000;
-export const DEFAULT_ZOOM_IN_EASING: ZoomTransitionEasing = "recordly";
-export const DEFAULT_ZOOM_OUT_EASING: ZoomTransitionEasing = "recordly";
+export const DEFAULT_ZOOM_IN_EASING: ZoomTransitionEasing = "yourbrand";
+export const DEFAULT_ZOOM_OUT_EASING: ZoomTransitionEasing = "yourbrand";
 export const DEFAULT_CONNECTED_ZOOM_EASING: ZoomTransitionEasing = "glide";
 export const DEFAULT_WEBCAM_SIZE = 40;
 export const DEFAULT_WEBCAM_REACT_TO_ZOOM = true;
@@ -323,6 +324,28 @@ export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
 };
 
 export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
+
+// ── 3D Zoom ──────────────────────────────────────────────
+
+/**
+ * 3D zoom configuration. When enabled, the recording surface tilts in 3D
+ * space during zoom transitions. The tilt direction is **automatically
+ * computed** from the zoom focus position (like FocuSee) — no manual
+ * angle picker needed.
+ */
+export interface Zoom3DConfig {
+  enabled: boolean;
+  /** 0–1 intensity of the perspective tilt (default 0.5). */
+  intensity: number;
+  /** Field of view in degrees (default 45). Higher = stronger perspective. */
+  fov?: number;
+}
+
+export const DEFAULT_ZOOM_3D_CONFIG: Zoom3DConfig = {
+  enabled: true,
+  intensity: 1.0,
+  fov: 60,
+};
 
 export function clampFocusToDepth(
   focus: ZoomFocus,

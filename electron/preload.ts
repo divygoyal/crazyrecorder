@@ -203,6 +203,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getCurrentVideoPath: () => {
 		return ipcRenderer.invoke("get-current-video-path");
 	},
+	checkFileExists: (filePath: string) => {
+		return ipcRenderer.invoke("check-file-exists", filePath);
+	},
 	clearCurrentVideoPath: () => {
 		return ipcRenderer.invoke("clear-current-video-path");
 	},

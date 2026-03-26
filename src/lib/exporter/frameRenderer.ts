@@ -3,7 +3,6 @@ import {
   Container,
   Sprite,
   Graphics,
-  BlurFilter,
   Texture,
   TextureSource,
 } from "pixi.js";
@@ -20,7 +19,7 @@ import type {
   WebcamOverlaySettings,
   ZoomTransitionEasing,
 } from "@/components/video-editor/types";
-import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
+import { ZOOM_DEPTH_SCALES, DEFAULT_ZOOM_3D_CONFIG } from "@/components/video-editor/types";
 import { getAssetPath, getRenderableAssetUrl } from "@/lib/assetPath";
 import { findDominantRegion } from "@/components/video-editor/videoPlayback/zoomRegionUtils";
 import {
@@ -30,11 +29,23 @@ import {
   createMotionBlurState,
   type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
+import { PerspectiveWarpFilter } from "@/components/video-editor/videoPlayback/perspectiveWarpFilter";
+import {
+  compute3DTransform,
+  is3DZoomActive,
+} from "@/components/video-editor/videoPlayback/perspectiveTransform";
+import {
+  createSpringState,
+  stepSpringValue,
+  type SpringState,
+  type SpringConfig,
+} from "@/components/video-editor/videoPlayback/motionSmoothing";
 import {
   DEFAULT_FOCUS,
   ZOOM_SCALE_DEADZONE,
   ZOOM_TRANSLATION_DEADZONE_PX,
 } from "@/components/video-editor/videoPlayback/constants";
+import { hasActiveMotionBlur } from "@/components/video-editor/videoPlayback/renderQuality";
 import { renderAnnotations } from "./annotationRenderer";
 import { renderCaptions } from "./captionRenderer";
 import {
@@ -112,6 +123,15 @@ function createAnimationState(): AnimationState {
   };
 }
 
+/** Spring config for 3D perspective — must match VideoPlayback.tsx */
+const PERSP_SPRING_CONFIG: SpringConfig = {
+  stiffness: 200,
+  damping: 22,
+  mass: 1.0,
+  restDelta: 0.0001,
+  restSpeed: 0.005,
+};
+
 // Renders video frames with all effects (background, zoom, crop, blur, shadow) to an offscreen canvas for export.
 
 export class FrameRenderer {
@@ -123,8 +143,8 @@ export class FrameRenderer {
   private videoTextureSource: TextureSource<any> | null = null;
   private backgroundSprite: Sprite | null = null;
   private maskGraphics: Graphics | null = null;
-  private blurFilter: BlurFilter | null = null;
   private motionBlurFilter: MotionBlurFilter | null = null;
+  private perspectiveFilter: PerspectiveWarpFilter | null = null;
   private shadowCanvas: HTMLCanvasElement | null = null;
   private shadowCtx: CanvasRenderingContext2D | null = null;
   private compositeCanvas: HTMLCanvasElement | null = null;
@@ -132,6 +152,11 @@ export class FrameRenderer {
   private config: FrameRenderConfig;
   private animationState: AnimationState;
   private motionBlurState: MotionBlurState;
+  private perspSpringX: SpringState;
+  private perspSpringY: SpringState;
+  private lastFrameTimeMs = 0;
+  private lastSpringRotX = 0;
+  private lastSpringRotY = 0;
   private layoutCache: any = null;
   private currentVideoTime = 0;
   private lastMotionVector = { x: 0, y: 0 };
@@ -151,6 +176,8 @@ export class FrameRenderer {
     this.config = config;
     this.animationState = createAnimationState();
     this.motionBlurState = createMotionBlurState();
+    this.perspSpringX = createSpringState(0);
+    this.perspSpringY = createSpringState(0);
   }
 
   async initialize(): Promise<void> {
@@ -224,13 +251,13 @@ export class FrameRenderer {
     await this.setupBackground();
     await this.setupWebcamSource();
 
-    // Setup blur filter for video container
-    this.blurFilter = new BlurFilter();
-    this.blurFilter.quality = 5;
-    this.blurFilter.resolution = this.app.renderer.resolution;
-    this.blurFilter.blur = 0;
-    this.motionBlurFilter = new MotionBlurFilter([0, 0], 5, 0);
-    this.videoContainer.filters = [this.blurFilter, this.motionBlurFilter];
+    if (hasActiveMotionBlur(this.config.zoomMotionBlur)) {
+      this.motionBlurFilter = new MotionBlurFilter([0, 0], 5, 0);
+    }
+    // Don't attach filters here — unified filter management in renderFrame handles it
+    this.videoContainer.filters = null;
+
+    this.perspectiveFilter = new PerspectiveWarpFilter(this.app.renderer.resolution);
 
     // Setup composite canvas for final output with shadows
     this.compositeCanvas = document.createElement("canvas");
@@ -744,16 +771,26 @@ export class FrameRenderer {
     const TICKS_PER_FRAME = 1;
 
     let maxMotionIntensity = 0;
+    let activeRegion: ZoomRegion | undefined;
+    let activeProgress = 0;
+    let activeFocus = { cx: 0.5, cy: 0.5 };
     for (let i = 0; i < TICKS_PER_FRAME; i++) {
-      const motionIntensity = this.updateAnimationState(timeMs);
-      maxMotionIntensity = Math.max(maxMotionIntensity, motionIntensity);
+      const result = this.updateAnimationState(timeMs);
+      maxMotionIntensity = Math.max(maxMotionIntensity, result.motionIntensity);
+      activeRegion = result.region;
+      activeProgress = result.progress;
+      activeFocus = result.focus;
     }
 
     // Apply transform once with maximum motion intensity from all ticks
+    // Don't pass videoContainer — we manage filters in unified block below
     applyZoomTransform({
       cameraContainer: this.cameraContainer,
-      blurFilter: this.blurFilter,
-      motionBlurFilter: this.motionBlurFilter,
+      blurFilter: null,
+      videoContainer: undefined,
+      motionBlurFilter: hasActiveMotionBlur(this.config.zoomMotionBlur ?? 0)
+        ? this.motionBlurFilter
+        : null,
       stageSize: this.layoutCache.stageSize,
       baseMask: this.layoutCache.maskRect,
       zoomScale: this.animationState.scale,
@@ -772,6 +809,55 @@ export class FrameRenderer {
       motionBlurState: this.motionBlurState,
       frameTimeMs: timeMs,
     });
+
+    // ── Unified filter management ─────────────────────────
+    // Build filter array once per frame to avoid quality fluctuation
+    if (this.videoContainer) {
+      const filters: import("pixi.js").Filter[] = [];
+
+      // Motion blur: check if filter has active velocity
+      if (this.motionBlurFilter && hasActiveMotionBlur(this.config.zoomMotionBlur ?? 0)) {
+        const vel = this.motionBlurFilter.velocity as { x: number; y: number };
+        if (vel.x !== 0 || vel.y !== 0) {
+          filters.push(this.motionBlurFilter);
+        }
+      }
+
+      // 3D perspective with spring animation (matching preview)
+      if (this.perspectiveFilter) {
+        const zoom3d = activeRegion?.zoom3d ?? DEFAULT_ZOOM_3D_CONFIG;
+        const deltaMs = Math.max(1, timeMs - this.lastFrameTimeMs);
+        const is3D = is3DZoomActive(zoom3d, activeProgress);
+
+        let targetRotX = 0;
+        let targetRotY = 0;
+        let fov = 0.7854;
+        if (is3D) {
+          const target = compute3DTransform(zoom3d!, activeFocus, activeProgress);
+          targetRotX = target.rotateX * target.strength;
+          targetRotY = target.rotateY * target.strength;
+          fov = target.fov;
+        }
+
+        const springRotX = stepSpringValue(this.perspSpringX, targetRotX, deltaMs, PERSP_SPRING_CONFIG);
+        const springRotY = stepSpringValue(this.perspSpringY, targetRotY, deltaMs, PERSP_SPRING_CONFIG);
+        this.lastSpringRotX = springRotX;
+        this.lastSpringRotY = springRotY;
+
+        const hasRotation = Math.abs(springRotX) > 0.0001 || Math.abs(springRotY) > 0.0001;
+        const isZoomActive = activeProgress > 0.01;
+        if (isZoomActive || hasRotation) {
+          this.perspectiveFilter.rotateX = springRotX;
+          this.perspectiveFilter.rotateY = springRotY;
+          this.perspectiveFilter.fov = fov;
+          this.perspectiveFilter.contentInset = activeProgress * 0.08;
+          filters.push(this.perspectiveFilter);
+        }
+      }
+      this.lastFrameTimeMs = timeMs;
+
+      this.videoContainer.filters = filters.length > 0 ? filters : null;
+    }
 
     // Render the PixiJS stage to its canvas (video only, transparent background)
     this.app.renderer.render(this.app.stage);
@@ -902,8 +988,8 @@ export class FrameRenderer {
     };
   }
 
-  private updateAnimationState(timeMs: number): number {
-    if (!this.cameraContainer || !this.layoutCache) return 0;
+  private updateAnimationState(timeMs: number): { motionIntensity: number; region: ZoomRegion | undefined; progress: number; focus: { cx: number; cy: number } } {
+    if (!this.cameraContainer || !this.layoutCache) return { motionIntensity: 0, region: undefined, progress: 0, focus: { cx: 0.5, cy: 0.5 } };
 
     const { region, strength, blendedScale, transition } = findDominantRegion(
       this.config.zoomRegions,
@@ -1006,12 +1092,17 @@ export class FrameRenderer {
       y: state.y - prevY,
     };
 
-    return Math.max(
-      Math.abs(state.appliedScale - prevScale),
-      Math.abs(state.x - prevX) / Math.max(1, this.layoutCache.stageSize.width),
-      Math.abs(state.y - prevY) /
-        Math.max(1, this.layoutCache.stageSize.height),
-    );
+    return {
+      motionIntensity: Math.max(
+        Math.abs(state.appliedScale - prevScale),
+        Math.abs(state.x - prevX) / Math.max(1, this.layoutCache.stageSize.width),
+        Math.abs(state.y - prevY) /
+          Math.max(1, this.layoutCache.stageSize.height),
+      ),
+      region,
+      progress: targetProgress,
+      focus: targetFocus,
+    };
   }
 
   private compositeWithShadows(): void {
@@ -1043,7 +1134,17 @@ export class FrameRenderer {
       );
     }
 
-    // Draw video layer with shadows on top of background
+    // Step 1.5: Spotlight overlay (FocuSee SpotLightCommand — dims background during zoom)
+    const spotlightOpacity = this.animationState.progress * 0.18;
+    if (spotlightOpacity > 0.001) {
+      ctx.save();
+      ctx.globalAlpha = spotlightOpacity;
+      ctx.fillStyle = "black";
+      ctx.fillRect(0, 0, w, h);
+      ctx.restore();
+    }
+
+    // Draw video layer with tilt-responsive shadows on top of background
     if (
       this.config.showShadow &&
       this.config.shadowIntensity > 0 &&
@@ -1054,17 +1155,23 @@ export class FrameRenderer {
       shadowCtx.clearRect(0, 0, w, h);
       shadowCtx.save();
 
-      // Calculate shadow parameters based on intensity (0-1)
+      // Tilt-responsive shadow (matches preview)
       const intensity = this.config.shadowIntensity;
-      const baseBlur1 = 48 * intensity;
-      const baseBlur2 = 16 * intensity;
-      const baseBlur3 = 8 * intensity;
-      const baseAlpha1 = 0.7 * intensity;
-      const baseAlpha2 = 0.5 * intensity;
-      const baseAlpha3 = 0.3 * intensity;
-      const baseOffset = 12 * intensity;
+      const zoomBoost = 1 + this.animationState.progress * 0.35;
+      const shadowX = Math.round(this.lastSpringRotY * 200);
+      const shadowBaseY = 12 * intensity;
+      const shadowY = Math.round(shadowBaseY - this.lastSpringRotX * 150);
+      const baseBlur1 = Math.round(48 * intensity * zoomBoost);
+      const baseBlur2 = Math.round(16 * intensity);
+      const baseBlur3 = Math.round(8 * intensity);
+      const baseAlpha1 = (0.7 * intensity * zoomBoost).toFixed(2);
+      const baseAlpha2 = (0.5 * intensity).toFixed(2);
+      const baseAlpha3 = (0.3 * intensity).toFixed(2);
 
-      shadowCtx.filter = `drop-shadow(0 ${baseOffset}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) drop-shadow(0 ${baseOffset / 3}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) drop-shadow(0 ${baseOffset / 6}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
+      shadowCtx.filter =
+        `drop-shadow(${shadowX}px ${shadowY}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) ` +
+        `drop-shadow(${Math.round(shadowX * 0.4)}px ${Math.round(intensity * 4 - this.lastSpringRotX * 50)}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) ` +
+        `drop-shadow(0px ${Math.round(intensity * 2)}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
       shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
       shadowCtx.restore();
       ctx.drawImage(this.shadowCanvas, 0, 0, w, h);
@@ -1268,8 +1375,10 @@ export class FrameRenderer {
     this.cameraContainer = null;
     this.videoContainer = null;
     this.maskGraphics = null;
-    this.blurFilter = null;
+    this.motionBlurFilter?.destroy();
     this.motionBlurFilter = null;
+    this.perspectiveFilter?.destroy();
+    this.perspectiveFilter = null;
     if (this.cursorOverlay) {
       this.cursorOverlay.destroy();
       this.cursorOverlay = null;

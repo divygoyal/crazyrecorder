@@ -134,9 +134,56 @@ type PendingExportSave = {
 };
 
 const MP4_EXPORT_FRAME_RATE = 60;
+const INITIAL_VIDEO_SOURCE_RETRY_COUNT = 12;
+const INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS = 250;
+const VIDEO_PLAYBACK_RETRY_LIMIT = 1;
 
 function cloneStructured<T>(value: T): T {
 	return globalThis.structuredClone(value);
+}
+
+function waitForDelay(ms: number) {
+	return new Promise<void>((resolve) => {
+		globalThis.setTimeout(resolve, ms);
+	});
+}
+
+async function resolveReadyVideoSourcePath(
+	candidatePath: string | null | undefined,
+	options: {
+		retries?: number;
+		delayMs?: number;
+	} = {},
+): Promise<string | null> {
+	if (typeof candidatePath !== "string") {
+		return null;
+	}
+
+	const sourcePath = fromFileUrl(candidatePath).trim();
+	if (!sourcePath) {
+		return null;
+	}
+
+	const checkFileExists = window.electronAPI?.checkFileExists;
+	if (typeof checkFileExists !== "function") {
+		return sourcePath;
+	}
+
+	const retries = options.retries ?? INITIAL_VIDEO_SOURCE_RETRY_COUNT;
+	const delayMs = options.delayMs ?? INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS;
+
+	for (let attempt = 0; attempt <= retries; attempt += 1) {
+		const result = await checkFileExists(sourcePath);
+		if (result.exists && result.size > 0) {
+			return sourcePath;
+		}
+
+		if (attempt < retries) {
+			await waitForDelay(delayMs);
+		}
+	}
+
+	return null;
 }
 
 function isComparableObject(value: unknown): value is Record<string, unknown> {
@@ -420,6 +467,10 @@ export default function VideoEditor() {
 	const videoPlaybackRef = useRef<VideoPlaybackRef>(null);
 	const projectBrowserTriggerRef = useRef<HTMLButtonElement | null>(null);
 	const projectBrowserFallbackTriggerRef = useRef<HTMLButtonElement | null>(null);
+	const videoLoadRetryRef = useRef<{ path: string | null; attempts: number }>({
+		path: null,
+		attempts: 0,
+	});
 	const nextZoomIdRef = useRef(1);
 	const nextTrimIdRef = useRef(1);
 	const nextSpeedIdRef = useRef(1);
@@ -860,10 +911,17 @@ export default function VideoEditor() {
 		[videoPath, videoSourcePath],
 	);
 
+	useEffect(() => {
+		videoLoadRetryRef.current = {
+			path: currentSourcePath,
+			attempts: 0,
+		};
+	}, [currentSourcePath]);
+
 	const projectDisplayName = useMemo(() => {
 		const fileName =
 			currentProjectPath?.split(/[\\/]/).pop() ?? currentSourcePath?.split(/[\\/]/).pop() ?? "";
-		const withoutExtension = fileName.replace(/\.recordly$/i, "").replace(/\.[^.]+$/, "");
+		const withoutExtension = fileName.replace(/\.yourbrand$/i, "").replace(/\.[^.]+$/, "");
 		return withoutExtension || t("editor.project.untitled", "Untitled");
 	}, [currentProjectPath, currentSourcePath, t]);
 
@@ -1055,8 +1113,27 @@ export default function VideoEditor() {
 			}
 
 			const project = candidate;
-			const sourcePath = fromFileUrl(project.videoPath);
+			const sourcePath = await resolveReadyVideoSourcePath(project.videoPath, {
+				retries: 1,
+				delayMs: 100,
+			});
+			if (!sourcePath) {
+				setError(`Project video file not found: ${fromFileUrl(project.videoPath)}`);
+				return false;
+			}
+
 			const normalizedEditor = normalizeProjectEditor(project.editor);
+			const webcamSourcePath = normalizedEditor.webcam.sourcePath
+				? await resolveReadyVideoSourcePath(normalizedEditor.webcam.sourcePath, {
+						retries: 1,
+						delayMs: 100,
+					})
+				: null;
+			const normalizedWebcamSettings = {
+				...normalizedEditor.webcam,
+				enabled: normalizedEditor.webcam.enabled && Boolean(webcamSourcePath),
+				sourcePath: webcamSourcePath,
+			};
 
 			try {
 				videoPlaybackRef.current?.pause();
@@ -1071,10 +1148,10 @@ export default function VideoEditor() {
 			setVideoSourcePath(sourcePath);
 			setVideoPath(toFileUrl(sourcePath));
 			setCurrentProjectPath(path ?? null);
-			if (normalizedEditor.webcam.sourcePath) {
+			if (webcamSourcePath) {
 				await window.electronAPI.setCurrentRecordingSession?.({
 					videoPath: sourcePath,
-					webcamPath: normalizedEditor.webcam.sourcePath,
+					webcamPath: webcamSourcePath,
 				});
 			} else {
 				await window.electronAPI.setCurrentVideoPath(sourcePath);
@@ -1105,7 +1182,7 @@ export default function VideoEditor() {
 			setBorderRadius(normalizedEditor.borderRadius);
 			setPadding(normalizedEditor.padding);
 			setCropRegion(DEFAULT_CROP_REGION);
-			setWebcam(normalizedEditor.webcam);
+			setWebcam(normalizedWebcamSettings);
 			setZoomRegions(normalizedEditor.zoomRegions);
 			setTrimRegions(normalizedEditor.trimRegions);
 			setSpeedRegions(normalizedEditor.speedRegions);
@@ -1201,6 +1278,49 @@ export default function VideoEditor() {
 			await window.electronAPI.setCurrentVideoPath(sourcePath);
 		},
 		[],
+	);
+
+	const handleVideoPlaybackError = useCallback(
+		async (message: string) => {
+			if (!currentSourcePath) {
+				setError(message);
+				return;
+			}
+
+			const retryState = videoLoadRetryRef.current;
+			const priorAttempts =
+				retryState.path === currentSourcePath ? retryState.attempts : 0;
+
+			if (priorAttempts < VIDEO_PLAYBACK_RETRY_LIMIT) {
+				videoLoadRetryRef.current = {
+					path: currentSourcePath,
+					attempts: priorAttempts + 1,
+				};
+
+				const recoveredSourcePath = await resolveReadyVideoSourcePath(
+					currentSourcePath,
+					{
+						retries: INITIAL_VIDEO_SOURCE_RETRY_COUNT,
+						delayMs: INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS,
+					},
+				);
+
+				if (recoveredSourcePath) {
+					setError(null);
+					setVideoSourcePath(recoveredSourcePath);
+					setVideoPath(toFileUrl(recoveredSourcePath));
+					setPreviewVersion((version) => version + 1);
+					return;
+				}
+			}
+
+			if (!currentProjectPath) {
+				await window.electronAPI.clearCurrentVideoPath();
+			}
+
+			setError(`${message}. The file may still be finalizing or is unavailable: ${currentSourcePath}`);
+		},
+		[currentProjectPath, currentSourcePath],
 	);
 
 	const handleUploadWebcam = useCallback(async () => {
@@ -1995,6 +2115,20 @@ export default function VideoEditor() {
 								depth,
 								focus: clampFocusToDepth(region.focus, depth),
 							}
+						: region,
+				),
+			);
+		},
+		[selectedZoomId],
+	);
+
+	const handleZoom3DChange = useCallback(
+		(zoom3d: import("./types").Zoom3DConfig) => {
+			if (!selectedZoomId) return;
+			setZoomRegions((prev) =>
+				prev.map((region) =>
+					region.id === selectedZoomId
+						? { ...region, zoom3d }
 						: region,
 				),
 			);
@@ -2946,7 +3080,7 @@ export default function VideoEditor() {
 					<span className="text-sm font-semibold tracking-tight text-white/90">
 						{projectDisplayName}
 					</span>
-					<span className="text-xs font-medium tracking-tight text-slate-500">.recordly</span>
+					<span className="text-xs font-medium tracking-tight text-slate-500">.yourbrand</span>
 				</div>
 				<div
 					className="absolute left-[88px] flex items-center gap-2"
@@ -3156,12 +3290,12 @@ export default function VideoEditor() {
 				</div>
 			</div>
 
-			<div className="relative flex min-h-0 flex-1 gap-3 p-4">
+			<div className="relative flex min-h-0 flex-1 gap-1 p-2">
 				{/* Left Column - Video & Timeline */}
-				<div className="order-2 flex h-full min-w-0 flex-[7] flex-col gap-3">
-					<PanelGroup direction="vertical" className="gap-3">
+				<div className="order-2 flex h-full min-w-0 flex-[9] flex-col gap-1">
+					<PanelGroup direction="vertical" className="gap-1">
 						{/* Top section: video preview and controls */}
-						<Panel defaultSize={67} minSize={40}>
+						<Panel defaultSize={78} minSize={50}>
 							<div className="relative flex h-full flex-col overflow-hidden">
 								{/* Video preview */}
 								<div
@@ -3316,7 +3450,7 @@ export default function VideoEditor() {
 						</PanelResizeHandle>
 
 						{/* Timeline section */}
-						<Panel defaultSize={33} minSize={20}>
+						<Panel defaultSize={25} minSize={15}>
 							<div className="h-full min-h-0 bg-[#17171a] rounded-2xl border border-white/10 shadow-lg overflow-auto flex flex-col">
 								<TimelineEditor
 									videoDuration={duration}
@@ -3375,6 +3509,10 @@ export default function VideoEditor() {
 							selectedZoomId ? zoomRegions.find((z) => z.id === selectedZoomId)?.depth : null
 						}
 						onZoomDepthChange={(depth) => selectedZoomId && handleZoomDepthChange(depth)}
+						selectedZoom3d={
+							selectedZoomId ? zoomRegions.find((z) => z.id === selectedZoomId)?.zoom3d : undefined
+						}
+						onZoom3DChange={(zoom3d) => selectedZoomId && handleZoom3DChange(zoom3d)}
 						selectedZoomId={selectedZoomId}
 						onZoomDelete={handleZoomDelete}
 						selectedTrimId={selectedTrimId}

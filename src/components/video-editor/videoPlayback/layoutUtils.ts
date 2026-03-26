@@ -47,8 +47,9 @@ export function layoutVideoContent(params: LayoutParams): LayoutResult | null {
   }
 
   app.renderer.resize(width, height);
-  app.canvas.style.width = '100%';
-  app.canvas.style.height = '100%';
+  // Do NOT override canvas CSS size — autoDensity sets it correctly from
+  // the renderer resolution.  Forcing "100%" can cause sub-pixel stretching
+  // on fractional-DPI Windows displays and undo the high-DPI backing buffer.
 
   // Apply crop region
   const crop = cropRegion || { x: 0, y: 0, width: 1, height: 1 };
