@@ -3372,7 +3372,7 @@ export default function VideoEditor() {
 												onTimeUpdate={setCurrentTime}
 												currentTime={currentTime}
 												onPlayStateChange={setIsPlaying}
-												onError={setError}
+												onError={handleVideoPlaybackError}
 												wallpaper={wallpaper}
 												zoomRegions={effectiveZoomRegions}
 												selectedZoomId={selectedZoomId}
