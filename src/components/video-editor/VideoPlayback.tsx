@@ -1103,7 +1103,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
         const cursorContainer = new Container();
         cursorContainerRef.current = cursorContainer;
-        cameraContainer.addChild(cursorContainer);
+        // Cursor lives on app.stage (NOT cameraContainer) so it isn't affected
+        // by the perspective shader's visual displacement or filter padding.
+        // We manually apply the camera zoom transform to cursor coordinates.
+        app.stage.addChild(cursorContainer);
 
         // Cursor overlay - rendered above the masked video so it can sit in front
         // of the content without getting clipped.
@@ -1432,6 +1435,19 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
           if (newCount !== oldCount || newCount > 0) {
             vc.filters = newCount > 0 ? videoFilters : null;
           }
+
+          // When perspective filter is active, disable the squircle mask so the
+          // shader's SDF handles all corner rounding (the hard mask clips edges
+          // before the shader runs, overriding its soft rounded corners).
+          const mg = maskGraphicsRef.current;
+          if (mg) {
+            const perspActive = perspFilterActiveRef.current;
+            if (perspActive && vc.mask === mg) {
+              vc.mask = null;
+            } else if (!perspActive && vc.mask === null) {
+              vc.mask = mg;
+            }
+          }
         }
       };
 
@@ -1556,14 +1572,26 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         );
         applyWebcamBubbleLayout(animationStateRef.current.appliedScale || 1);
 
-        // Update cursor overlay
+        // Update cursor overlay — cursor lives in app.stage, so we transform
+        // baseMask coordinates through the camera zoom to get stage-space position.
         const cursorOverlay = cursorOverlayRef.current;
         if (cursorOverlay) {
           const timeMs = currentTimeRef.current;
+          const cc = cameraContainerRef.current;
+          const bm = baseMaskRef.current;
+          const zoomedViewport = cc
+            ? {
+                x: bm.x * cc.scale.x + cc.position.x,
+                y: bm.y * cc.scale.y + cc.position.y,
+                width: bm.width * cc.scale.x,
+                height: bm.height * cc.scale.y,
+                sourceCrop: bm.sourceCrop,
+              }
+            : bm;
           cursorOverlay.update(
             cursorTelemetryRef.current,
             timeMs,
-            baseMaskRef.current,
+            zoomedViewport,
             showCursorRef.current,
             !isPlayingRef.current || isSeekingRef.current,
           );
