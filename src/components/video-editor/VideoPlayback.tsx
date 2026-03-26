@@ -1103,10 +1103,11 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
         const cursorContainer = new Container();
         cursorContainerRef.current = cursorContainer;
-        // Cursor lives on app.stage (NOT cameraContainer) so it isn't affected
-        // by the perspective shader's visual displacement or filter padding.
-        // We manually apply the camera zoom transform to cursor coordinates.
-        app.stage.addChild(cursorContainer);
+        // Cursor lives INSIDE videoContainer so it is warped by the
+        // perspective filter together with the video.  The cameraContainer
+        // zoom transform also applies automatically through the scene graph.
+        // Cursor position uses baseMask (videoContainer-local) coordinates.
+        videoContainer.addChild(cursorContainer);
 
         // Cursor overlay - rendered above the masked video so it can sit in front
         // of the content without getting clipped.
@@ -1325,10 +1326,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         state.appliedScale = appliedTransform.scale;
 
         // ── Unified filter management ─────────────────────────
-        // Perspective filter goes on videoContainer (NOT cameraContainer)
-        // so the cursor overlay in sibling cursorContainer is not affected
-        // by the filter's FILTER_PADDING offset. Cursor is drawn on top of
-        // the 3D-warped video, matching FocuSee's rendering model.
+        // Perspective filter goes on videoContainer.  The cursor overlay
+        // also lives inside videoContainer, so it is warped by the same
+        // perspective transform and stays aligned with the video content.
         const vc = videoContainerRef.current;
         if (vc) {
           const videoFilters: import("pixi.js").Filter[] = [];
@@ -1576,26 +1576,18 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
         );
         applyWebcamBubbleLayout(animationStateRef.current.appliedScale || 1);
 
-        // Update cursor overlay — cursor lives in app.stage, so we transform
-        // baseMask coordinates through the camera zoom to get stage-space position.
+        // Update cursor overlay — cursor lives in videoContainer, so its
+        // coordinates are in videoContainer-local space (= baseMask coords).
+        // The cameraContainer zoom and perspective filter warp are applied
+        // automatically by the PixiJS scene graph.
         const cursorOverlay = cursorOverlayRef.current;
         if (cursorOverlay) {
           const timeMs = currentTimeRef.current;
-          const cc = cameraContainerRef.current;
           const bm = baseMaskRef.current;
-          const zoomedViewport = cc
-            ? {
-                x: bm.x * cc.scale.x + cc.position.x,
-                y: bm.y * cc.scale.y + cc.position.y,
-                width: bm.width * cc.scale.x,
-                height: bm.height * cc.scale.y,
-                sourceCrop: bm.sourceCrop,
-              }
-            : bm;
           cursorOverlay.update(
             cursorTelemetryRef.current,
             timeMs,
-            zoomedViewport,
+            bm,
             showCursorRef.current,
             !isPlayingRef.current || isSeekingRef.current,
           );

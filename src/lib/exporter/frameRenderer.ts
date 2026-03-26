@@ -229,7 +229,9 @@ export class FrameRenderer {
     this.cursorContainer = new Container();
     this.app.stage.addChild(this.cameraContainer);
     this.cameraContainer.addChild(this.videoContainer);
-    this.cameraContainer.addChild(this.cursorContainer);
+    // Cursor lives inside videoContainer so it is warped by the
+    // perspective filter together with the video content.
+    this.videoContainer.addChild(this.cursorContainer);
 
     if (cursorOverlayEnabled) {
       this.cursorOverlay = new PixiCursorOverlay({
@@ -857,6 +859,17 @@ export class FrameRenderer {
       this.lastFrameTimeMs = timeMs;
 
       this.videoContainer.filters = filters.length > 0 ? filters : null;
+
+      // Toggle mask off during perspective so the shader's SDF handles
+      // corner rounding and the cursor isn't clipped by the hard mask.
+      const hasPerspective = filters.includes(this.perspectiveFilter!);
+      if (hasPerspective && this.videoContainer.mask === this.maskGraphics) {
+        this.videoContainer.mask = null;
+        if (this.maskGraphics) this.maskGraphics.visible = false;
+      } else if (!hasPerspective && this.videoContainer.mask === null && this.maskGraphics) {
+        this.maskGraphics.visible = true;
+        this.videoContainer.mask = this.maskGraphics;
+      }
     }
 
     // Render the PixiJS stage to its canvas (video only, transparent background)
