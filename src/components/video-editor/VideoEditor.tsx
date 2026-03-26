@@ -136,7 +136,7 @@ type PendingExportSave = {
 const MP4_EXPORT_FRAME_RATE = 60;
 const INITIAL_VIDEO_SOURCE_RETRY_COUNT = 12;
 const INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS = 250;
-const VIDEO_PLAYBACK_RETRY_LIMIT = 1;
+const VIDEO_PLAYBACK_RETRY_LIMIT = 3;
 
 function cloneStructured<T>(value: T): T {
 	return globalThis.structuredClone(value);
@@ -1406,7 +1406,12 @@ export default function VideoEditor() {
 
 				const sessionResult = await window.electronAPI.getCurrentRecordingSession?.();
 				if (sessionResult?.success && sessionResult.session?.videoPath) {
-					const sourcePath = fromFileUrl(sessionResult.session.videoPath);
+					const rawPath = fromFileUrl(sessionResult.session.videoPath);
+					// Wait for the file to be fully written (FFmpeg may still be finalizing)
+					const sourcePath = await resolveReadyVideoSourcePath(rawPath, {
+						retries: INITIAL_VIDEO_SOURCE_RETRY_COUNT,
+						delayMs: INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS,
+					}) ?? rawPath;
 					setVideoSourcePath(sourcePath);
 					setVideoPath(toFileUrl(sourcePath));
 					setCurrentProjectPath(null);
@@ -1421,7 +1426,12 @@ export default function VideoEditor() {
 
 				const result = await window.electronAPI.getCurrentVideoPath();
 				if (result.success && result.path) {
-					const sourcePath = fromFileUrl(result.path);
+					const rawPath = fromFileUrl(result.path);
+					// Wait for the file to be fully written (FFmpeg may still be finalizing)
+					const sourcePath = await resolveReadyVideoSourcePath(rawPath, {
+						retries: INITIAL_VIDEO_SOURCE_RETRY_COUNT,
+						delayMs: INITIAL_VIDEO_SOURCE_RETRY_DELAY_MS,
+					}) ?? rawPath;
 					setVideoSourcePath(sourcePath);
 					setVideoPath(toFileUrl(sourcePath));
 					setCurrentProjectPath(null);
